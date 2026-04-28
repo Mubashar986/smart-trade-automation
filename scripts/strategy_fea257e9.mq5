@@ -4,21 +4,21 @@
 
 #include <Trade/Trade.mqh>
 
-input double InpLotSize         = 0.10;
-input ulong  InpMagicNumber     = 257e9;
+input double InpLotSize          = 0.10;
+input ulong  InpMagicNumber      = 257000000;
 input int    InpDeviationPoints  = 20;
-input double InpBuyPrice        = 100.0;
-input double InpSellPrice       = 140.0;
-input double InpStopLossPoints  = 10.0;
-input double InpTakeProfitPoints= 40.0;
-input bool   InpUseBuyOrders    = true;
-input bool   InpUseSellOrders   = true;
+input double InpBuyPrice         = 100.0;
+input double InpSellPrice        = 140.0;
+input double InpStopLossPoints   = 10.0;
+input double InpTakeProfitPoints = 40.0;
+input bool   InpUseBuyOrders     = true;
+input bool   InpUseSellOrders    = true;
 
 CTrade trade;
 
-string  g_symbol;
-int     g_digits;
-double  g_point;
+string g_symbol;
+int    g_digits;
+double g_point;
 
 double NormalizePrice(const double price)
 {
@@ -38,26 +38,6 @@ bool HasOpenPositionByType(const ENUM_POSITION_TYPE pos_type)
          if(PositionGetString(POSITION_SYMBOL) == g_symbol &&
             (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagicNumber &&
             (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == pos_type)
-         {
-            return true;
-         }
-      }
-   }
-   return false;
-}
-
-bool HasAnyPosition()
-{
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0)
-         continue;
-
-      if(PositionSelectByTicket(ticket))
-      {
-         if(PositionGetString(POSITION_SYMBOL) == g_symbol &&
-            (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
          {
             return true;
          }
@@ -125,11 +105,12 @@ void OnTick()
    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
       return;
 
-   if(!SymbolInfoTick(g_symbol, _Tick))
+   MqlTick tick;
+   if(!SymbolInfoTick(g_symbol, tick))
       return;
 
-   double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
+   double bid = tick.bid;
+   double ask = tick.ask;
 
    if(bid <= 0.0 || ask <= 0.0)
       return;
