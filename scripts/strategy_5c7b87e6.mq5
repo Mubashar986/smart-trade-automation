@@ -6,10 +6,10 @@
 #property program_name "strategy_5c7b87e6"
 
 #include <Trade\Trade.mqh>
-#include <Trade\SymbolInfo.mqh>  // Required for CSymbolInfo
-#include <Trade\AccountInfo.mqh> // Required for CAccountInfo
+#include <Trade\SymbolInfo.mqh>
+#include <Trade\AccountInfo.mqh>
 #include <Indicators\RSI.mqh>
-#include <MQL5\DateTime.mqh>     // Required for TimeToString
+#include <MQL5\DateTime.mqh>
 
 //--- Global Objects ---
 CTrade             m_trade;           // Trading object
@@ -19,7 +19,7 @@ int                m_rsi_handle;      // Handle for the RSI indicator
 
 //--- Global Variables for OnTick logic ---
 datetime           last_bar_time;     // Stores the time of the last processed bar to ensure once-per-bar logic
-ulong              magic_number = 0x5c7b87e6; // Unique Magic Number for this EA's orders (FIXED: hexadecimal literal)
+ulong              magic_number = 0x5c7b87e6; // Unique Magic Number for this EA's orders
 
 //--- Risk Management Globals ---
 int                trades_today_count = 0;         // Counter for trades executed today
@@ -147,7 +147,8 @@ int OnInit()
     last_day_reset = TimeCurrent(); // Set initial day for reset logic
     
     Print("Expert Advisor Initialized successfully for ", InpSymbol, " ", EnumToString(InpTimeframe));
-    Print("RSI Period: ", InpRSIPeriod, ", Buy < ", InpRSIBuyLevel, ", Close > ", InpRSIBuyLevel); // Fixed this Print statement
+    // FIX: Corrected the Close level in the print statement
+    Print("RSI Period: ", InpRSIPeriod, ", Buy < ", InpRSIBuyLevel, ", Close > ", InpRSICloseLevel);
     Print("Lot Size: ", InpLotSize, ", SL: ", InpStopLossPoints, ", TP: ", InpTakeProfitPoints);
     Print("Trailing Stop: ", InpTrailingStopPoints, ", Slippage: ", InpSlippagePoints);
     Print("Max Trades/Day: ", InpMaxTradesPerDay, ", Max Drawdown: ", InpMaxDrawdownPercent, "%, Max Consecutive Losses: ", InpMaxConsecutiveLosses);
@@ -164,7 +165,7 @@ void OnDeinit(const int reason)
     if (m_rsi_handle != INVALID_HANDLE)
     {
         // MQL5 handles indicator deletion automatically, no need for IndicatorRelease
-        // IndicatorRelease(m_rsi_handle); // This is not strictly necessary for MQL5 standard indicators
+        // IndicatorRelease(m_rsi_handle);
     }
     Print("Expert Advisor Deinitialized, Reason: ", reason);
 }
@@ -194,7 +195,7 @@ void OnTick()
     last_bar_time = rates[0].time;
 
     //--- Daily Reset for trade counters and flags ---
-    // Check if the current day is different from the last reset day (FIXED: MQL5 date comparison)
+    // Check if the current day is different from the last reset day
     if (TimeToString(rates[0].time, TIME_DATE) != TimeToString(last_day_reset, TIME_DATE))
     {
         trades_today_count = 0;
@@ -202,7 +203,7 @@ void OnTick()
         trading_disabled_by_consecutive_losses = false; // Re-enable trading after a new day
         trading_disabled_by_drawdown = false;           // Re-enable trading after a new day (if drawdown was the reason)
                                                         // Note: initial_account_balance is not reset, assumes it's fixed.
-        last_day_reset = rates[0].time; // Update last_day_reset to the new bar's time for consistency (FIXED: TimeCurrent() to rates[0].time)
+        last_day_reset = rates[0].time; // Update last_day_reset to the new bar's time for consistency
         Print("Daily reset: trades_today_count, consecutive_losses, and trading flags reset.");
     }
     
@@ -227,7 +228,6 @@ void OnTick()
             Print("Trading currently disabled due to Max Consecutive Losses.");
             consecutive_loss_alert_printed = true;
         }
-        // No need for a combined message if individual messages are printed upon activation.
         return; // Do not trade if disabled by risk management
     }
     else
@@ -318,7 +318,7 @@ void OnTick()
                         if (m_trade.PositionClose(position_ticket))
                         {
                             PrintFormat("BUY #%lu closed due to RSI (%.2f) > close threshold (%.2f)", 
-                                        position_ticket, current_rsi, InpRSICloseLevel); // FIXED: Simplified PrintFormat
+                                        position_ticket, current_rsi, InpRSICloseLevel);
                         }
                         else
                         {
@@ -327,7 +327,7 @@ void OnTick()
                         }
                     }
                 }
-                // No SELL logic specified, so no need to handle SELL positions
+                // No SELL logic specified in the original request.
             }
         }
     }
@@ -361,4 +361,3 @@ void OnTick()
         }
     }
 }
-//+------------------------------------------------------------------+
