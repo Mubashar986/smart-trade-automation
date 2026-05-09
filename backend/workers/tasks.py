@@ -1,5 +1,8 @@
 from celery import Celery
-from backend.services.llm_service import generate_mql5_script, fix_mql5_script
+from backend.services.llm_service import generate_mql5_script, fix_mql5_script, parse_strategy_with_llm
+from backend.services.validation_service import validate_strategy
+from backend.api.models.strategy_models import StrategyJSON
+import json
 from backend.services.github_service import GitHubService
 from backend.services.backtest_service import run_backtest
 from backend.db.models import JobStatus, Job
@@ -70,9 +73,46 @@ def compile_on_github(script_name: str, script_content: str):
 @celery_app.task
 def process_strategy_pipeline(job_id: str, prompt: str):
     try:
-        # ── Step 1: Generate MQL5 script via LLM ─────────────────────
+        # ── Step 1: Parse & Validate ─────────────────────────────────
+        update_job(job_id, status=JobStatus.PARSING)
+        
+        # Check if it's a mock trigger before parsing
+        if prompt.strip() in ["1", "2", "3", "broken"]:
+            strategy_data_str = prompt.strip()
+            warnings = []
+        else:
+            # Check if prompt is already parsed JSON (submitted from "Make Strategy Safe" UI)
+            try:
+                potential_json = json.loads(prompt)
+                if isinstance(potential_json, dict) and "entry" in potential_json:
+                    parsed_strategy = potential_json
+                else:
+                    parsed_strategy = asyncio.run(parse_strategy_with_llm(prompt))
+            except Exception:
+                parsed_strategy = asyncio.run(parse_strategy_with_llm(prompt))
+
+            # Validate the parsed JSON
+            strategy_obj = StrategyJSON(**parsed_strategy)
+            
+            # Save parsed strategy to the database so frontend can read it if validation fails
+            update_job(job_id, status=JobStatus.VALIDATING, parsed_strategy=json.dumps(parsed_strategy))
+            validation_result = validate_strategy(strategy_obj)
+            
+            if validation_result["status"] == "failed":
+                error_msgs = "\n".join(validation_result["errors"] + validation_result["warnings"])
+                update_job(
+                    job_id, 
+                    status=JobStatus.FAILED, 
+                    error_message=f"Strategy validation failed:\n{error_msgs}\n\nPlease review your strategy input and add missing safety points."
+                )
+                return
+            
+            strategy_data_str = json.dumps(parsed_strategy, indent=2)
+            warnings = validation_result["warnings"]
+
+        # ── Step 2: Generate MQL5 script via LLM ─────────────────────
         update_job(job_id, status=JobStatus.GENERATING)
-        script_content, script_name = asyncio.run(generate_mql5_script(prompt, job_id))
+        script_content, script_name = asyncio.run(generate_mql5_script(strategy_data_str, job_id, warnings))
         update_job(job_id, script_content=script_content, script_name=script_name)
 
         # ── Step 2: Compile → Check → Fix loop ───────────────────────

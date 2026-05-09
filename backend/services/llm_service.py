@@ -1,3 +1,4 @@
+import json
 from openai import AzureOpenAI
 from backend.config import settings
 
@@ -149,29 +150,112 @@ def clean_script_content(raw: str) -> str:
     return content.strip()
 
 
-async def generate_mql5_script(user_prompt: str, job_id: str) -> tuple[str, str]:
+PARSE_SYSTEM_PROMPT = """
+You are a trading strategy parser.
+
+Your job is to convert the user's natural language trading strategy into valid JSON only.
+
+Return only JSON. No explanation. No markdown.
+
+Use this exact schema:
+
+{
+  "symbol": "XAUUSD",
+  "timeframe": "H1",
+  "strategy_type": "RSI",
+  "entry": {
+    "indicator": "RSI",
+    "period": 14,
+    "operator": "<",
+    "value": 30,
+    "action": "BUY"
+  },
+  "exit": {
+    "indicator": "RSI",
+    "period": 14,
+    "operator": ">",
+    "value": 70,
+    "action": "CLOSE"
+  },
+  "risk": {
+    "lot_size": 0.01,
+    "stop_loss_points": 300,
+    "take_profit_points": 600,
+    "max_trades_per_day": 3,
+    "max_drawdown_percent": 5.0,
+    "max_consecutive_losses": 3,
+    "trailing_stop_points": 100,
+    "slippage_points": 30
+  }
+}
+
+Rules:
+- If timeframe is missing, use "H1".
+- If RSI period is missing, use 14.
+- If lot size is missing, use 0.01.
+- If max trades per day is missing, use null.
+- If stop loss is missing, use null.
+- If take profit is missing, use null.
+- If max_drawdown_percent is missing, use null.
+- If max_consecutive_losses is missing, use null.
+- If trailing_stop_points is missing, use null.
+- If slippage_points is missing, use null.
+- Supported strategy_type values: RSI, MA_CROSSOVER, PRICE_LEVEL.
+- Supported timeframes: M1, M5, M15, M30, H1, H4, D1.
+"""
+
+async def parse_strategy_with_llm(user_prompt: str) -> dict:
+    if user_prompt.strip() in ["1", "2", "3", "broken"]:
+        return {"mock": user_prompt.strip()}
+
+    response = client.chat.completions.create(
+        model=DEPLOYMENT,
+        messages=[
+            {"role": "system", "content": PARSE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt}
+        ],
+        max_completion_tokens=4096,
+        response_format={"type": "json_object"}
+    )
+    
+    content = response.choices[0].message.content
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        # Fallback if json parsing fails due to markdown fences
+        content_clean = clean_script_content(content)
+        return json.loads(content_clean)
+
+
+async def generate_mql5_script(strategy_data_str: str, job_id: str, warnings: list = None) -> tuple[str, str]:
     script_name = f"strategy_{str(job_id)[:8]}"
 
-    clean_prompt = user_prompt.strip()
+    clean_prompt = strategy_data_str.strip()
 
-    # Mock scripts for quick testing (type "1", "2", or "3")
-    if clean_prompt == "1":
-        return MOCK_SCRIPT_1.strip(), f"{script_name}.mq5"
-    elif clean_prompt == "2":
-        return MOCK_SCRIPT_2.strip(), f"{script_name}.mq5"
-    elif clean_prompt == "3":
-        return MOCK_SCRIPT_3.strip(), f"{script_name}.mq5"
-    elif clean_prompt == "broken":
-        # Sends a known-broken script to demonstrate the error correction loop.
-        # The loop will detect compile failures and ask the LLM to fix them.
-        return BROKEN_TEST_SCRIPT.strip(), f"{script_name}.mq5"
+    # Mock scripts for quick testing (type "1", "2", "3", or "broken")
+    if clean_prompt in ["1", "2", "3", "broken"]:
+        if clean_prompt == "1":
+            return MOCK_SCRIPT_1.strip(), f"{script_name}.mq5"
+        elif clean_prompt == "2":
+            return MOCK_SCRIPT_2.strip(), f"{script_name}.mq5"
+        elif clean_prompt == "3":
+            return MOCK_SCRIPT_3.strip(), f"{script_name}.mq5"
+        elif clean_prompt == "broken":
+            return BROKEN_TEST_SCRIPT.strip(), f"{script_name}.mq5"
+
+    prompt_content = f"Generate a complete MQL5 Expert Advisor for this strategy structure:\n{strategy_data_str}\n\nScript name should be: {script_name}"
+    
+    if warnings:
+        prompt_content += "\n\nAdditionally, please consider the following warnings from the strategy validation and add safety measures where necessary:\n"
+        for w in warnings:
+            prompt_content += f"- {w}\n"
 
     # Real LLM generation via Azure OpenAI
     response = client.chat.completions.create(
         model=DEPLOYMENT,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Generate a complete MQL5 Expert Advisor for this strategy:\n{user_prompt}\n\nScript name should be: {script_name}"}
+            {"role": "user", "content": prompt_content}
         ],
         max_completion_tokens=16384,
     )

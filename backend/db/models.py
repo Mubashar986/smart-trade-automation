@@ -9,6 +9,8 @@ from backend.db.database import Base
 
 class JobStatus(enum.Enum):
     PENDING = "pending"
+    PARSING = "parsing"
+    VALIDATING = "validating"
     GENERATING = "generating"
     COMPILING = "compiling"
     BACKTESTING = "backtesting"
@@ -41,6 +43,7 @@ class Job(Base):
     compile_log     = Column(Text, nullable=True)
     compile_success = Column(String(10), nullable=True)
     backtest_result = Column(Text, nullable=True)
+    parsed_strategy = Column(Text, nullable=True)
     status          = Column(Enum(JobStatus), default=JobStatus.PENDING)
     github_run_id   = Column(String(50), nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)

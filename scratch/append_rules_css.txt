@@ -1,0 +1,49 @@
+
+/* ── Rules Banner ────────────────────────────────────────────────────── */
+.rules-banner {
+  background: rgba(0, 200, 160, 0.04);
+  border: 1px solid rgba(0, 200, 160, 0.12);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+}
+.rules-banner strong {
+  display: block;
+  color: var(--primary);
+  font-size: 0.9rem;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.rules-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rule-chip {
+  background: rgba(0, 200, 160, 0.08);
+  border: 1px solid rgba(0, 200, 160, 0.2);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.rule-tag {
+  display: inline-block;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--amber);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  font-size: 0.68rem;
+  padding: 2px 7px;
+  border-radius: 10px;
+  margin-left: 8px;
+  font-weight: 600;
+}
+.editor-actions {
+  display: flex;
+  gap: 15px;
+  margin-top: 24px;
+}
+.editor-actions .cancel-btn { flex: 1; }
+.editor-actions .upgrade-btn { flex: 2; }
