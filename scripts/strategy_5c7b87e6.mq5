@@ -6,8 +6,10 @@
 #property program_name "strategy_5c7b87e6"
 
 #include <Trade\Trade.mqh>
-#include <Indicators\OsMA.mqh> // Not needed but included in typical templates, remove if not used.
+#include <Trade\SymbolInfo.mqh>  // Required for CSymbolInfo
+#include <Trade\AccountInfo.mqh> // Required for CAccountInfo
 #include <Indicators\RSI.mqh>
+#include <MQL5\DateTime.mqh>     // Required for TimeToString
 
 //--- Global Objects ---
 CTrade             m_trade;           // Trading object
@@ -17,7 +19,7 @@ int                m_rsi_handle;      // Handle for the RSI indicator
 
 //--- Global Variables for OnTick logic ---
 datetime           last_bar_time;     // Stores the time of the last processed bar to ensure once-per-bar logic
-ulong              magic_number = 5c7b87e6; // Unique Magic Number for this EA's orders
+ulong              magic_number = 0x5c7b87e6; // Unique Magic Number for this EA's orders (FIXED: hexadecimal literal)
 
 //--- Risk Management Globals ---
 int                trades_today_count = 0;         // Counter for trades executed today
@@ -145,7 +147,7 @@ int OnInit()
     last_day_reset = TimeCurrent(); // Set initial day for reset logic
     
     Print("Expert Advisor Initialized successfully for ", InpSymbol, " ", EnumToString(InpTimeframe));
-    Print("RSI Period: ", InpRSIPeriod, ", Buy < ", InpRSIBuyLevel, ", Close > ", InpRSICloseLevel);
+    Print("RSI Period: ", InpRSIPeriod, ", Buy < ", InpRSIBuyLevel, ", Close > ", InpRSIBuyLevel); // Fixed this Print statement
     Print("Lot Size: ", InpLotSize, ", SL: ", InpStopLossPoints, ", TP: ", InpTakeProfitPoints);
     Print("Trailing Stop: ", InpTrailingStopPoints, ", Slippage: ", InpSlippagePoints);
     Print("Max Trades/Day: ", InpMaxTradesPerDay, ", Max Drawdown: ", InpMaxDrawdownPercent, "%, Max Consecutive Losses: ", InpMaxConsecutiveLosses);
@@ -161,7 +163,8 @@ void OnDeinit(const int reason)
     //--- Clean up indicator handle if necessary ---
     if (m_rsi_handle != INVALID_HANDLE)
     {
-        //MQL5 handles indicator deletion automatically, no need for IndicatorRelease
+        // MQL5 handles indicator deletion automatically, no need for IndicatorRelease
+        // IndicatorRelease(m_rsi_handle); // This is not strictly necessary for MQL5 standard indicators
     }
     Print("Expert Advisor Deinitialized, Reason: ", reason);
 }
@@ -191,14 +194,15 @@ void OnTick()
     last_bar_time = rates[0].time;
 
     //--- Daily Reset for trade counters and flags ---
-    if (Day() != Day(last_day_reset))
+    // Check if the current day is different from the last reset day (FIXED: MQL5 date comparison)
+    if (TimeToString(rates[0].time, TIME_DATE) != TimeToString(last_day_reset, TIME_DATE))
     {
         trades_today_count = 0;
-        consecutive_losses = 0;
+        consecutive_losses = 0; // Reset consecutive losses on a new day
         trading_disabled_by_consecutive_losses = false; // Re-enable trading after a new day
         trading_disabled_by_drawdown = false;           // Re-enable trading after a new day (if drawdown was the reason)
                                                         // Note: initial_account_balance is not reset, assumes it's fixed.
-        last_day_reset = TimeCurrent();
+        last_day_reset = rates[0].time; // Update last_day_reset to the new bar's time for consistency (FIXED: TimeCurrent() to rates[0].time)
         Print("Daily reset: trades_today_count, consecutive_losses, and trading flags reset.");
     }
     
@@ -206,29 +210,44 @@ void OnTick()
     CheckAndUpdateConsecutiveLosses();
 
     //--- Risk Management Checks (Pre-Trade) ---
+    // Static flags to print alerts only once when a disabled state is entered
+    static bool drawdown_alert_printed = false;
+    static bool consecutive_loss_alert_printed = false;
+
     if (trading_disabled_by_drawdown || trading_disabled_by_consecutive_losses)
     {
         // Print message once if just disabled, then suppress for subsequent ticks
-        if (trading_disabled_by_drawdown && !trading_disabled_by_consecutive_losses)
+        if (trading_disabled_by_drawdown && !drawdown_alert_printed)
+        {
             Print("Trading currently disabled due to Max Drawdown.");
-        else if (trading_disabled_by_consecutive_losses && !trading_disabled_by_drawdown)
+            drawdown_alert_printed = true;
+        }
+        if (trading_disabled_by_consecutive_losses && !consecutive_loss_alert_printed)
+        {
             Print("Trading currently disabled due to Max Consecutive Losses.");
-        else if (trading_disabled_by_drawdown && trading_disabled_by_consecutive_losses)
-            Print("Trading currently disabled due to both Max Drawdown and Max Consecutive Losses.");
+            consecutive_loss_alert_printed = true;
+        }
+        // No need for a combined message if individual messages are printed upon activation.
         return; // Do not trade if disabled by risk management
+    }
+    else
+    {
+        // Reset alert flags if trading is re-enabled (e.g., by daily reset)
+        drawdown_alert_printed = false;
+        consecutive_loss_alert_printed = false;
     }
 
     // Check Max Trades Per Day
     if (trades_today_count >= InpMaxTradesPerDay)
     {
-        //Print("Max trades per day (", InpMaxTradesPerDay, ") reached.");
+        //Print("Max trades per day (", InpMaxTradesPerDay, ") reached."); // Commented out to reduce log spam
         return; 
     }
 
     // Check Max Drawdown Percentage
     if (m_account.Equity() < initial_account_balance * (1.0 - InpMaxDrawdownPercent / 100.0))
     {
-        if (!trading_disabled_by_drawdown) // Only print message once
+        if (!trading_disabled_by_drawdown) // Only print message once upon entering drawdown state
         {
             trading_disabled_by_drawdown = true;
             PrintFormat("ALERT: Max Drawdown (%.2f%%) exceeded. Trading disabled. Current Equity: %.2f, Initial Balance: %.2f", 
@@ -239,12 +258,13 @@ void OnTick()
 
     //--- Get RSI value for the last closed bar ---
     double rsi_values[];
-    if (CopyBuffer(m_rsi_handle, 0, 1, 1, rsi_values) != 1) // Get 1 value from 1 bar back
+    // Shift 1 for the completed (closed) bar (rates[1] equivalent)
+    if (CopyBuffer(m_rsi_handle, 0, 1, 1, rsi_values) != 1) 
     {
         Print("Failed to get RSI values.");
         return;
     }
-    double current_rsi = rsi_values[0]; // RSI value for the last fully formed bar (rates[1] equivalent)
+    double current_rsi = rsi_values[0]; 
     
     //--- Check for open positions for this EA and symbol ---
     bool position_open = false;
@@ -267,15 +287,16 @@ void OnTick()
                         double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
                         double current_stop_loss = PositionGetDouble(POSITION_SL);
                         
-                        double trailing_activation_price = open_price + InpTrailingStopPoints * m_symbol.Point();
+                        // Trailing stop activation: price must be at least InpTrailingStopPoints profitable from open_price
+                        double trailing_activation_level = open_price + InpTrailingStopPoints * m_symbol.Point();
                         
-                        // Only trail if profit is sufficient to cover trailing stop points
-                        if (current_price > trailing_activation_price)
+                        // Check if current price is above activation level
+                        if (current_price > trailing_activation_level)
                         {
                             double new_stop_loss = current_price - InpTrailingStopPoints * m_symbol.Point();
                             new_stop_loss = m_symbol.NormalizePrice(new_stop_loss);
                             
-                            // Move SL only if it's higher than current SL and above open price
+                            // Only move SL if new SL is higher than the current one AND profitable (above open_price)
                             if (new_stop_loss > current_stop_loss && new_stop_loss > open_price)
                             {
                                 if (m_trade.PositionModify(position_ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
@@ -296,8 +317,8 @@ void OnTick()
                     {
                         if (m_trade.PositionClose(position_ticket))
                         {
-                            PrintFormat("BUY #%lu closed due to RSI (%.2f) > %s threshold (%.2f)", 
-                                        position_ticket, current_rsi, EnumToString(InpRSIBuyLevel < InpRSICloseLevel ? ENUM_OPERATOR_LESS : ENUM_OPERATOR_GREATER), InpRSICloseLevel);
+                            PrintFormat("BUY #%lu closed due to RSI (%.2f) > close threshold (%.2f)", 
+                                        position_ticket, current_rsi, InpRSICloseLevel); // FIXED: Simplified PrintFormat
                         }
                         else
                         {
