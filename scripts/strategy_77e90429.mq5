@@ -10,7 +10,6 @@
 #property expert_show_inputs
 
 #include <Trade/Trade.mqh> // Include CTrade class for easy order management
-#include <Indicators/RSI.mqh> // Include RSI indicator functions
 
 //--- Input parameters
 input string   SymbolName          = "XAUUSD";      // Symbol to trade (XAUUSD)
@@ -31,11 +30,10 @@ input long     MagicNumber         = 12345;         // Unique magic number for t
 CTrade         m_trade;           // CTrade object for trading operations
 int            m_rsi_handle;      // Handle for the RSI indicator
 double         m_rsi_buffer[];    // Buffer to store RSI values
-MqlRates       m_rates[];         // Array to store price history
 
-datetime       m_last_bar_time = 0; // Timestamp of the last processed bar
-datetime       m_last_trade_day = 0; // Last day a trade was attempted/opened
-int            m_trades_today = 0; // Counter for trades opened today
+datetime       m_last_bar_time = 0;       // Timestamp of the last processed bar
+datetime       m_last_trade_day_start = 0; // Stores the start of the day for trade counting
+int            m_trades_today = 0;        // Counter for trades opened today
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -58,8 +56,12 @@ int OnInit()
       return INIT_FAILED;
    }
    
-   //--- Set up indicator buffers for CopyBuffer
-   SetIndexBuffer(0, m_rsi_buffer, INDICATOR_DATA);
+   //--- For CopyBuffer, we don't use SetIndexBuffer for standard indicators
+   //   The m_rsi_buffer will be used directly with CopyBuffer.
+
+   //--- Initialize m_last_trade_day_start to the beginning of the current day
+   // This ensures the daily trade counter resets correctly upon EA start
+   m_last_trade_day_start = (datetime)(TimeCurrent() / 86400) * 86400;
 
    Print("EA Initialized successfully. Symbol: ", SymbolName, ", Timeframe: ", EnumToString(Timeframe));
    
@@ -102,32 +104,23 @@ void OnTick()
    m_last_bar_time = current_bar_time;
    
    //--- Check if a new day has started to reset trade counter
-   datetime current_day = (datetime)TimeDay(TimeCurrent());
-   if (current_day != m_last_trade_day)
+   datetime current_day_start = (datetime)(TimeCurrent() / 86400) * 86400; // Calculate start of current day
+   if (current_day_start != m_last_trade_day_start)
    {
       m_trades_today = 0;
-      m_last_trade_day = current_day;
+      m_last_trade_day_start = current_day_start;
       Print("New day started. Trades counter reset to 0.");
    }
 
-   //--- Get the latest price data
-   // We need at least 2 bars for RSI calculation (current and previous closed)
-   if (CopyRates(SymbolName, Timeframe, 0, 2, m_rates) != 2)
-   {
-      Print("Error copying rates for ", SymbolName, " on ", EnumToString(Timeframe), ", error code: ", GetLastError());
-      return;
-   }
-
    //--- Get the RSI value for the most recently CLOSED bar (index 1)
-   // We need at least 2 bars for RSI calculation, and we want the value for the *previous* closed bar
-   // to react to completed bar conditions, typical for H1 strategies.
+   // Copy 1 value from index 1 (the previous closed bar) into m_rsi_buffer[0]
    if (CopyBuffer(m_rsi_handle, 0, 1, 1, m_rsi_buffer) != 1)
    {
       Print("Error copying RSI buffer for ", SymbolName, " on ", EnumToString(Timeframe), ", error code: ", GetLastError());
       return;
    }
    
-   double current_rsi = m_rsi_buffer[0];
+   double current_rsi = m_rsi_buffer[0]; // RSI value of the previous closed bar
    
    //--- Get current bid and ask prices
    double bid_price = SymbolInfoDouble(SymbolName, SYMBOL_BID);
@@ -139,40 +132,46 @@ void OnTick()
        return;
    }
 
-   //--- Check for open positions for this EA's magic number
+   //--- Get symbol info for price normalization
+   double point_size = SymbolInfoDouble(SymbolName, SYMBOL_POINT);
+   int    digits     = (int)SymbolInfoInteger(SymbolName, SYMBOL_DIGITS);
+
+   //--- Check for open positions for this EA's magic number and symbol
    int open_buy_positions = 0;
    
    for (int i = 0; i < PositionsTotal(); i++)
    {
-      ulong position_ticket = PositionGetTicket(i);
-      if (position_ticket == 0)
+      if (PositionSelectByIndex(i)) // Select position by index
       {
-         Print("Error getting position ticket, error code: ", GetLastError());
-         continue;
-      }
-      
-      if (PositionGetInteger(POSITION_MAGIC) == MagicNumber && PositionGetString(POSITION_SYMBOL) == SymbolName)
-      {
-         ENUM_POSITION_TYPE position_type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-         
-         //--- Exit logic: Close BUY positions if RSI is overbought
-         if (position_type == POSITION_TYPE_BUY)
+         if (PositionGetInteger(POSITION_MAGIC) == MagicNumber && PositionGetString(POSITION_SYMBOL) == SymbolName)
          {
-            open_buy_positions++;
-            if (current_rsi > RSI_Overbought_Level)
+            ENUM_POSITION_TYPE position_type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            
+            //--- Exit logic: Close BUY positions if RSI is overbought
+            if (position_type == POSITION_TYPE_BUY)
             {
-               Print("RSI (", current_rsi, ") > Overbought (", RSI_Overbought_Level, "). Closing BUY position #", position_ticket);
-               if (!m_trade.PositionClose(position_ticket, SlippagePoints))
+               open_buy_positions++;
+               if (current_rsi > RSI_Overbought_Level)
                {
-                  Print("Failed to close BUY position #", position_ticket, ", error: ", GetLastError());
-               }
-               else
-               {
-                  // Close successful, decrement count if needed (optional, will be updated next tick)
-                  open_buy_positions--; 
+                  ulong  position_ticket = PositionGetInteger(POSITION_TICKET);
+                  string pos_symbol      = PositionGetString(POSITION_SYMBOL);
+                  double pos_volume      = PositionGetDouble(POSITION_VOLUME);
+
+                  Print("RSI (", current_rsi, ") > Overbought (", RSI_Overbought_Level, "). Closing BUY position #", position_ticket);
+                  
+                  // Correct CTrade::PositionClose usage: symbol, volume, ticket
+                  if (!m_trade.PositionClose(pos_symbol, pos_volume, position_ticket))
+                  {
+                     Print("Failed to close BUY position #", position_ticket, " for ", pos_symbol, ", error: ", GetLastError());
+                  }
+                  // No need to decrement open_buy_positions here, the loop will reflect the change on the next tick
                }
             }
          }
+      }
+      else
+      {
+         Print("Error selecting position by index ", i, ", error code: ", GetLastError());
       }
    }
 
@@ -185,9 +184,12 @@ void OnTick()
          {
             // Calculate Stop Loss and Take Profit levels
             // StopLossPoints and TakeProfitPoints are in broker points, convert to price
-            double point_size = SymbolInfoDouble(SymbolName, SYMBOL_POINT);
             double sl_price = ask_price - (StopLossPoints * point_size);
             double tp_price = ask_price + (TakeProfitPoints * point_size);
+
+            // Normalize prices to the symbol's digits
+            sl_price = NormalizeDouble(sl_price, digits);
+            tp_price = NormalizeDouble(tp_price, digits);
 
             Print("RSI (", current_rsi, ") < Oversold (", RSI_Oversold_Level, "). Attempting to open BUY position.");
             if (m_trade.Buy(LotSize, SymbolName, ask_price, sl_price, tp_price, "RSI Buy"))
@@ -197,7 +199,7 @@ void OnTick()
             }
             else
             {
-               Print("Failed to place BUY order, error: ", GetLastError());
+               Print("Failed to place BUY order, error: ", GetLastError(), ". Current Ask: ", ask_price);
             }
          }
       }
