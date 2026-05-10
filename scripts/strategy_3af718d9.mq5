@@ -102,7 +102,7 @@ void OnTick()
     last_bar_time = current_bar_time; // Update the last processed bar time
 
     //--- Check for a new day and reset the trade counter if it's a new day
-    datetime temp_current_day = iTime(_Symbol, PERIOD_D1, 0); // Get the start of the current day
+    datetime temp_current_day = iTime(_Symbol, PERIOD_D1, 0); // Get the start of the current day's bar
     if (temp_current_day != current_day)
     {
         current_day = temp_current_day; // Update the current day
@@ -114,6 +114,7 @@ void OnTick()
     double rsi_values[];
     // CopyBuffer copies indicator buffer data. Buffer 0 contains the main RSI line.
     // We copy 1 value starting from index 1 (the current closed bar).
+    // Index 1 corresponds to the most recently closed bar (index 0 is the current, forming bar).
     if (CopyBuffer(h_rsi, 0, 1, 1, rsi_values) != 1)
     {
         Print("Error copying RSI buffer: ", GetLastError());
@@ -137,8 +138,8 @@ void OnTick()
     bool has_buy_position = false;
     for (int i = 0; i < PositionsTotal(); i++) // Iterate through all open positions
     {
-        // PositionGetTicket returns 'long'
-        long position_ticket = PositionGetTicket(i); // Get position ticket
+        // PositionGetTicket returns 'ulong'
+        ulong position_ticket = PositionGetTicket(i); // Get position ticket
         // Check if the position belongs to this EA (via Magic Number) and symbol
         if (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber && PositionGetString(POSITION_SYMBOL) == _Symbol)
         {
@@ -160,8 +161,8 @@ void OnTick()
             // Iterate backwards to safely close multiple positions without affecting loop indices
             for (int i = PositionsTotal() - 1; i >= 0; i--)
             {
-                // PositionGetTicket returns 'long'
-                long position_ticket = PositionGetTicket(i);
+                // PositionGetTicket returns 'ulong'
+                ulong position_ticket = PositionGetTicket(i);
                 // Check again to ensure we're closing our own BUY positions
                 if (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber &&
                     PositionGetString(POSITION_SYMBOL) == _Symbol &&
@@ -173,7 +174,7 @@ void OnTick()
                     }
                     else
                     {
-                        Print("Failed to close BUY position #", position_ticket, ", Error: ", GetLastError());
+                        Print("Failed to close BUY position #", position_ticket, ", Error: ", GetLastError(), ". Retrying on next tick.");
                     }
                 }
             }
