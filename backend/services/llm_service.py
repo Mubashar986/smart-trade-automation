@@ -1,15 +1,49 @@
 import json
-from openai import AzureOpenAI
+import logging
 from backend.config import settings
 
-# Azure OpenAI configuration
-client = AzureOpenAI(
-    api_key=settings.AZURE_OPENAI_API_KEY,
-    api_version="2024-12-01-preview",
-    azure_endpoint="https://searchify.openai.azure.com/",
-)
+logger = logging.getLogger(__name__)
 
-DEPLOYMENT = "gpt-5.4-mini"
+# ── Provider Detection ─────────────────────────────────────────────────────────
+# Priority: Azure OpenAI → Gemini (native SDK)
+# Azure: uses openai SDK with AzureOpenAI client
+# Gemini: uses google-generativeai native SDK (avoids 403 on /v1beta/openai)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_PROVIDER      = None   # "azure" | "gemini"
+_azure_client  = None   # AzureOpenAI instance (Azure path)
+_gemini_model  = None   # genai.GenerativeModel instance (Gemini path)
+_AZURE_MODEL   = "gpt-5.4-mini"
+
+if settings.AZURE_OPENAI_API_KEY:
+    from openai import AzureOpenAI
+    _azure_client = AzureOpenAI(
+        api_key=settings.AZURE_OPENAI_API_KEY,
+        api_version="2024-12-01-preview",
+        azure_endpoint="https://searchify.openai.azure.com/",
+    )
+    _PROVIDER = "azure"
+    logger.info("LLM provider: Azure OpenAI (model=%s)", _AZURE_MODEL)
+
+elif settings.GEMINI_API_KEY:
+    # Use native google-generativeai SDK.
+    # The OpenAI-compatible endpoint (/v1beta/openai) returns 403 PERMISSION_DENIED
+    # for standard AI Studio keys — native SDK works with any AI Studio key.
+    import google.generativeai as genai
+    genai.configure(api_key=settings.GEMINI_API_KEY)
+    _gemini_model = genai.GenerativeModel(settings.CLAW_MODEL)  # e.g. gemini-2.5-flash
+    _PROVIDER = "gemini"
+    logger.info("LLM provider: Google Gemini native SDK (model=%s)", settings.CLAW_MODEL)
+
+else:
+    logger.warning(
+        "No LLM provider configured. "
+        "Set AZURE_OPENAI_API_KEY or GEMINI_API_KEY in your .env file. "
+        "Mock prompts (1/2/3/broken) will still work."
+    )
+
+
+# ── Shared prompts ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """
 You are an expert MQL5 programmer for MetaTrader 5.
@@ -27,6 +61,63 @@ Rules:
 
 The script must compile with 0 errors in MetaEditor.
 """
+
+PARSE_SYSTEM_PROMPT = """
+You are a trading strategy parser.
+
+Your job is to convert the user's natural language trading strategy into valid JSON only.
+
+Return only JSON. No explanation. No markdown.
+
+Use this exact schema:
+
+{
+  "symbol": "XAUUSD",
+  "timeframe": "H1",
+  "strategy_type": "RSI",
+  "entry": {
+    "indicator": "RSI",
+    "period": 14,
+    "operator": "<",
+    "value": 30,
+    "action": "BUY"
+  },
+  "exit": {
+    "indicator": "RSI",
+    "period": 14,
+    "operator": ">",
+    "value": 70,
+    "action": "CLOSE"
+  },
+  "risk": {
+    "lot_size": 0.01,
+    "stop_loss_points": 300,
+    "take_profit_points": 600,
+    "max_trades_per_day": 3,
+    "max_drawdown_percent": 5.0,
+    "max_consecutive_losses": 3,
+    "trailing_stop_points": 100,
+    "slippage_points": 30
+  }
+}
+
+Rules:
+- If timeframe is missing, use "H1".
+- If RSI period is missing, use 14.
+- If lot size is missing, use 0.01.
+- If max trades per day is missing, use null.
+- If stop loss is missing, use null.
+- If take profit is missing, use null.
+- If max_drawdown_percent is missing, use null.
+- If max_consecutive_losses is missing, use null.
+- If trailing_stop_points is missing, use null.
+- If slippage_points is missing, use null.
+- Supported strategy_type values: RSI, MA_CROSSOVER, PRICE_LEVEL.
+- Supported timeframes: M1, M5, M15, M30, H1, H4, D1.
+"""
+
+
+# ── Mock scripts (no LLM needed) ──────────────────────────────────────────────
 
 MOCK_SCRIPT_1 = """
 //+------------------------------------------------------------------+
@@ -137,6 +228,8 @@ void OnTick()
 """
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
 def clean_script_content(raw: str) -> str:
     """Strip markdown code fences if the LLM wraps the output."""
     content = raw.strip()
@@ -150,118 +243,91 @@ def clean_script_content(raw: str) -> str:
     return content.strip()
 
 
-PARSE_SYSTEM_PROMPT = """
-You are a trading strategy parser.
+def _call_llm(system_prompt: str, user_prompt: str, json_mode: bool = False, large: bool = False) -> str:
+    """
+    Unified LLM call that works with either Azure OpenAI or Gemini.
 
-Your job is to convert the user's natural language trading strategy into valid JSON only.
+    Args:
+        system_prompt: Instruction context for the model.
+        user_prompt:   The actual user request.
+        json_mode:     If True, instructs model to return pure JSON.
+        large:         If True, uses the larger/more capable model variant.
 
-Return only JSON. No explanation. No markdown.
+    Returns:
+        Raw text response from the model.
 
-Use this exact schema:
+    Raises:
+        RuntimeError: If no LLM provider is configured.
+    """
+    if _PROVIDER is None:
+        raise RuntimeError(
+            "No LLM provider configured. "
+            "Add AZURE_OPENAI_API_KEY or GEMINI_API_KEY to your .env file."
+        )
 
-{
-  "symbol": "XAUUSD",
-  "timeframe": "H1",
-  "strategy_type": "RSI",
-  "entry": {
-    "indicator": "RSI",
-    "period": 14,
-    "operator": "<",
-    "value": 30,
-    "action": "BUY"
-  },
-  "exit": {
-    "indicator": "RSI",
-    "period": 14,
-    "operator": ">",
-    "value": 70,
-    "action": "CLOSE"
-  },
-  "risk": {
-    "lot_size": 0.01,
-    "stop_loss_points": 300,
-    "take_profit_points": 600,
-    "max_trades_per_day": 3,
-    "max_drawdown_percent": 5.0,
-    "max_consecutive_losses": 3,
-    "trailing_stop_points": 100,
-    "slippage_points": 30
-  }
-}
+    # ── Azure OpenAI path ──────────────────────────────────────────────
+    if _PROVIDER == "azure":
+        kwargs = dict(
+            model=_AZURE_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            max_tokens=4096 if json_mode else 16384,
+        )
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        response = _azure_client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content
 
-Rules:
-- If timeframe is missing, use "H1".
-- If RSI period is missing, use 14.
-- If lot size is missing, use 0.01.
-- If max trades per day is missing, use null.
-- If stop loss is missing, use null.
-- If take profit is missing, use null.
-- If max_drawdown_percent is missing, use null.
-- If max_consecutive_losses is missing, use null.
-- If trailing_stop_points is missing, use null.
-- If slippage_points is missing, use null.
-- Supported strategy_type values: RSI, MA_CROSSOVER, PRICE_LEVEL.
-- Supported timeframes: M1, M5, M15, M30, H1, H4, D1.
-"""
+    # ── Gemini native SDK path ───────────────────────────────────────────
+    # Gemini doesn’t have a separate system role — prepend to user message.
+    full_prompt = f"{system_prompt.strip()}\n\n{user_prompt.strip()}"
+    if json_mode:
+        full_prompt += "\n\nIMPORTANT: Return ONLY valid JSON. No markdown, no explanation."
+    response = _gemini_model.generate_content(full_prompt)
+    return response.text
+
+
+# ── Public API ─────────────────────────────────────────────────────────────────
 
 async def parse_strategy_with_llm(user_prompt: str) -> dict:
+    """Convert a natural language trading strategy into a structured JSON dict."""
     if user_prompt.strip() in ["1", "2", "3", "broken"]:
         return {"mock": user_prompt.strip()}
 
-    response = client.chat.completions.create(
-        model=DEPLOYMENT,
-        messages=[
-            {"role": "system", "content": PARSE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt}
-        ],
-        max_completion_tokens=4096,
-        response_format={"type": "json_object"}
-    )
-    
-    content = response.choices[0].message.content
+    content = _call_llm(PARSE_SYSTEM_PROMPT, user_prompt, json_mode=True, large=False)
     try:
         return json.loads(content)
     except json.JSONDecodeError:
-        # Fallback if json parsing fails due to markdown fences
-        content_clean = clean_script_content(content)
-        return json.loads(content_clean)
+        # Fallback: strip any stray markdown fences and retry
+        return json.loads(clean_script_content(content))
 
 
 async def generate_mql5_script(strategy_data_str: str, job_id: str, warnings: list = None) -> tuple[str, str]:
+    """Generate a complete MQL5 Expert Advisor script from a strategy description."""
     script_name = f"strategy_{str(job_id)[:8]}"
-
     clean_prompt = strategy_data_str.strip()
 
-    # Mock scripts for quick testing (type "1", "2", "3", or "broken")
+    # Mock scripts for quick testing (no LLM call needed)
     if clean_prompt in ["1", "2", "3", "broken"]:
-        if clean_prompt == "1":
-            return MOCK_SCRIPT_1.strip(), f"{script_name}.mq5"
-        elif clean_prompt == "2":
-            return MOCK_SCRIPT_2.strip(), f"{script_name}.mq5"
-        elif clean_prompt == "3":
-            return MOCK_SCRIPT_3.strip(), f"{script_name}.mq5"
-        elif clean_prompt == "broken":
-            return BROKEN_TEST_SCRIPT.strip(), f"{script_name}.mq5"
+        scripts = {"1": MOCK_SCRIPT_1, "2": MOCK_SCRIPT_2, "3": MOCK_SCRIPT_3, "broken": BROKEN_TEST_SCRIPT}
+        return scripts[clean_prompt].strip(), f"{script_name}.mq5"
 
-    prompt_content = f"Generate a complete MQL5 Expert Advisor for this strategy structure:\n{strategy_data_str}\n\nScript name should be: {script_name}"
-    
-    if warnings:
-        prompt_content += "\n\nAdditionally, please consider the following warnings from the strategy validation and add safety measures where necessary:\n"
-        for w in warnings:
-            prompt_content += f"- {w}\n"
-
-    # Real LLM generation via Azure OpenAI
-    response = client.chat.completions.create(
-        model=DEPLOYMENT,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt_content}
-        ],
-        max_completion_tokens=16384,
+    user_prompt = (
+        f"Generate a complete MQL5 Expert Advisor for this strategy structure:\n"
+        f"{strategy_data_str}\n\nScript name should be: {script_name}"
     )
+    if warnings:
+        user_prompt += (
+            "\n\nAdditionally, please consider the following warnings from the strategy "
+            "validation and add safety measures where necessary:\n"
+        )
+        for w in warnings:
+            user_prompt += f"- {w}\n"
 
-    script_content = clean_script_content(response.choices[0].message.content)
-    return script_content, f"{script_name}.mq5"
+    raw = _call_llm(SYSTEM_PROMPT, user_prompt, json_mode=False, large=True)
+    return clean_script_content(raw), f"{script_name}.mq5"
 
 
 async def fix_mql5_script(
@@ -292,14 +358,5 @@ Fix EVERY error in the script and return the COMPLETE corrected MQL5 code.
 Do NOT omit any part of the script — return the full file.
 Return ONLY the raw MQL5 code, no markdown, no explanation."""
 
-    response = client.chat.completions.create(
-        model=DEPLOYMENT,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": fix_prompt},
-        ],
-        max_completion_tokens=16384,
-    )
-
-    return clean_script_content(response.choices[0].message.content)
-
+    raw = _call_llm(SYSTEM_PROMPT, fix_prompt, json_mode=False, large=True)
+    return clean_script_content(raw)

@@ -10,6 +10,8 @@ class Config:
     GITHUB_WORKFLOW_FILE = os.getenv("GITHUB_WORKFLOW_FILE", "compile.yml")
     
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+    CLAW_MODEL = os.getenv("CLAW_MODEL", "gemini-2.5-flash")
     AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
 
     STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")

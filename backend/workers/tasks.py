@@ -11,16 +11,18 @@ from backend.config import settings
 import asyncio
 import ssl
 
-# Upstash Redis requires SSL — convert redis:// to rediss://
+# Upstash Redis requires SSL — convert redis:// → rediss:// only for Upstash URLs
 redis_url = settings.REDIS_URL
 if redis_url.startswith("redis://") and "upstash.io" in redis_url:
     redis_url = redis_url.replace("redis://", "rediss://", 1)
 
 celery_app = Celery("tasks", broker=redis_url, backend=redis_url)
 
-# SSL config required for Upstash
-celery_app.conf.broker_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
-celery_app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+# Only apply SSL config when actually using a rediss:// (Upstash) connection.
+# Applying SSL params to a plain redis:// causes a Celery startup crash.
+if redis_url.startswith("rediss://"):
+    celery_app.conf.broker_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+    celery_app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 github = GitHubService()
 
