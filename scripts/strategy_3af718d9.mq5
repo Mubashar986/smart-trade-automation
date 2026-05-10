@@ -4,6 +4,9 @@
 #property description "RSI Buy Strategy - strategy_3af718d9"
 #property strict
 
+//--- Include the standard library for CTrade object
+#include <Trade/Trade.mqh>
+
 //--- Input parameters
 input int        InpMagicNumber      = 12345;            // Magic number for trades
 input double     InpLotSize          = 0.01;             // Lot size
@@ -20,7 +23,7 @@ int               h_rsi;                  // Handle for RSI indicator
 MqlRates          rates_info[];           // Array to store rates data for bar check
 datetime          last_bar_time;          // Timestamp of the last processed bar
 int               trades_today;           // Counter for trades opened today
-datetime          current_day;            // Stores the current day for trade counting
+datetime          current_day;            // Stores the current day for trade counting (start of day)
 CTrade            trade;                  // Trade object for sending orders
 
 //+------------------------------------------------------------------+
@@ -48,8 +51,8 @@ int OnInit()
     last_bar_time = 0;
 
     //--- Initialize trade counter for today
-    // TimeDay returns the start of the day for the given datetime
-    current_day = (datetime)TimeDay(TimeCurrent());
+    // Get the start of the current day using iTime for PERIOD_D1
+    current_day = iTime(_Symbol, PERIOD_D1, 0); 
     trades_today = 0; // Reset trade counter
 
     //--- Print EA initialization status and parameters
@@ -99,7 +102,7 @@ void OnTick()
     last_bar_time = current_bar_time; // Update the last processed bar time
 
     //--- Check for a new day and reset the trade counter if it's a new day
-    datetime temp_current_day = (datetime)TimeDay(TimeCurrent());
+    datetime temp_current_day = iTime(_Symbol, PERIOD_D1, 0); // Get the start of the current day
     if (temp_current_day != current_day)
     {
         current_day = temp_current_day; // Update the current day
@@ -134,7 +137,8 @@ void OnTick()
     bool has_buy_position = false;
     for (int i = 0; i < PositionsTotal(); i++) // Iterate through all open positions
     {
-        ulong position_ticket = PositionGetTicket(i); // Get position ticket
+        // PositionGetTicket returns 'long'
+        long position_ticket = PositionGetTicket(i); // Get position ticket
         // Check if the position belongs to this EA (via Magic Number) and symbol
         if (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber && PositionGetString(POSITION_SYMBOL) == _Symbol)
         {
@@ -156,7 +160,8 @@ void OnTick()
             // Iterate backwards to safely close multiple positions without affecting loop indices
             for (int i = PositionsTotal() - 1; i >= 0; i--)
             {
-                ulong position_ticket = PositionGetTicket(i);
+                // PositionGetTicket returns 'long'
+                long position_ticket = PositionGetTicket(i);
                 // Check again to ensure we're closing our own BUY positions
                 if (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber &&
                     PositionGetString(POSITION_SYMBOL) == _Symbol &&
