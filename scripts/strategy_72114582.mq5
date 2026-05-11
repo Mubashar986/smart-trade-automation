@@ -44,11 +44,11 @@ int OnInit()
 {
     //--- Initialize trade object
     trade.SetExpertMagic(MagicNumber);
-    // Set initial deviation using _SymbolPoint. This will be updated on each tick based on the specific symbol.
-    _SymbolPoint = SymbolInfoDouble(NULL, SYMBOL_POINT); // Get symbol point early for deviation
-    trade.SetDeviation(SlippagePoints * _SymbolPoint); 
+    // Set initial deviation in points. CTrade::SetDeviation expects points, not price value.
+    trade.SetDeviation(SlippagePoints); 
 
     //--- Get symbol properties for the current chart symbol (NULL for _Symbol)
+    _SymbolPoint = SymbolInfoDouble(NULL, SYMBOL_POINT); // Get symbol point
     _SymbolDigits = (int)SymbolInfoInteger(NULL, SYMBOL_DIGITS);
     
     //--- Validate symbol point
@@ -123,7 +123,8 @@ void OnTick()
     //--- Update symbol properties on each new bar for robustness, especially if _SymbolPoint changes (e.g., fractional pips)
     _SymbolPoint = SymbolInfoDouble(NULL, SYMBOL_POINT);
     _SymbolDigits = (int)SymbolInfoInteger(NULL, SYMBOL_DIGITS);
-    trade.SetDeviation(SlippagePoints * _SymbolPoint); // Update deviation using current _SymbolPoint
+    // Update deviation using current SlippagePoints. CTrade::SetDeviation expects points.
+    trade.SetDeviation(SlippagePoints); 
 
     //--- Reset daily trade counter if a new day has started
     MqlDateTime currentDt;
@@ -201,6 +202,7 @@ void OnTick()
             tp_price = NormalizeDouble(tp_price, _SymbolDigits);
 
             // Send BUY order
+            // The CTrade::Buy method handles deviation based on trade.SetDeviation(SlippagePoints)
             if (trade.Buy(Lots, NULL, 0, sl_price, tp_price, "BUY_EA_Signal"))
             {
                 _tradesToday++; // Increment daily trade counter
@@ -221,8 +223,9 @@ void OnTick()
     {
         if (current_ema_value > Exit_Level_Close)
         {
-            // Close the existing BUY position
-            if (trade.PositionClose(buy_position_ticket, SlippagePoints * _SymbolPoint))
+            // Close the existing BUY position by ticket.
+            // CTrade::PositionClose(ticket) closes the full position, using the deviation set by trade.SetDeviation().
+            if (trade.PositionClose(buy_position_ticket))
             {
                 Print("BUY position (Ticket: ", buy_position_ticket, ") closed by strategy logic (EMA > Exit_Level_Close).");
             }
