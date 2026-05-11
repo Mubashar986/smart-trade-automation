@@ -34,7 +34,7 @@ CiMA                    iMA_Handle;                 // Indicator handle for EMA
 double                  _SymbolPoint;               // Symbol's point size
 int                     _SymbolDigits;              // Symbol's number of digits after decimal point
 datetime                _lastBarTime                = 0;                        // Time of the last processed bar
-datetime                _lastTradeDay               = 0;                        // Stores the last day a trade was opened
+MqlDateTime             _lastTradeMqlDay;           // Stores the last day a trade was opened (using MqlDateTime for robust date comparison)
 int                     _tradesToday                = 0;                        // Counter for trades opened today
 
 //+------------------------------------------------------------------+
@@ -44,11 +44,11 @@ int OnInit()
 {
     //--- Initialize trade object
     trade.SetExpertMagic(MagicNumber);
-    // Set initial deviation using _Point. This will be updated on each tick based on the specific symbol.
-    trade.SetDeviation(SlippagePoints * _Point); 
+    // Set initial deviation using _SymbolPoint. This will be updated on each tick based on the specific symbol.
+    _SymbolPoint = SymbolInfoDouble(NULL, SYMBOL_POINT); // Get symbol point early for deviation
+    trade.SetDeviation(SlippagePoints * _SymbolPoint); 
 
     //--- Get symbol properties for the current chart symbol (NULL for _Symbol)
-    _SymbolPoint = SymbolInfoDouble(NULL, SYMBOL_POINT);
     _SymbolDigits = (int)SymbolInfoInteger(NULL, SYMBOL_DIGITS);
     
     //--- Validate symbol point
@@ -73,7 +73,11 @@ int OnInit()
     }
 
     //--- Set initial last trade day to today to prevent immediate trade count reset on first tick
-    _lastTradeDay = TimeDay(TimeCurrent());
+    MqlDateTime dt_current;
+    TimeToStruct(TimeCurrent(), dt_current);
+    _lastTradeMqlDay.year = dt_current.year;
+    _lastTradeMqlDay.mon = dt_current.mon;
+    _lastTradeMqlDay.day = dt_current.day;
     
     Print(Expert_Name, " initialized successfully.");
     Print("Symbol: ", _Symbol, ", Timeframe: ", EnumToString(Trade_Timeframe));
@@ -116,16 +120,20 @@ void OnTick()
     }
     _lastBarTime = currentBarTime; // Update last processed bar time
 
-    //--- Update symbol properties on each new bar for robustness, especially if _Point changes (e.g., fractional pips)
+    //--- Update symbol properties on each new bar for robustness, especially if _SymbolPoint changes (e.g., fractional pips)
     _SymbolPoint = SymbolInfoDouble(NULL, SYMBOL_POINT);
     _SymbolDigits = (int)SymbolInfoInteger(NULL, SYMBOL_DIGITS);
-    trade.SetDeviation(SlippagePoints * _Point); // Update deviation using current _Point
+    trade.SetDeviation(SlippagePoints * _SymbolPoint); // Update deviation using current _SymbolPoint
 
     //--- Reset daily trade counter if a new day has started
-    if (TimeDay(TimeCurrent()) != _lastTradeDay)
+    MqlDateTime currentDt;
+    TimeToStruct(TimeCurrent(), currentDt);
+    if (currentDt.day != _lastTradeMqlDay.day || currentDt.mon != _lastTradeMqlDay.mon || currentDt.year != _lastTradeMqlDay.year)
     {
         _tradesToday = 0;
-        _lastTradeDay = TimeDay(TimeCurrent());
+        _lastTradeMqlDay.year = currentDt.year;
+        _lastTradeMqlDay.mon = currentDt.mon;
+        _lastTradeMqlDay.day = currentDt.day;
         Print("New day. Daily trade counter reset to 0.");
     }
 
@@ -158,7 +166,7 @@ void OnTick()
 
     for (int i = 0; i < PositionsTotal(); i++)
     {
-        if (PositionGetTicket(i)) // Select a position by its index
+        if (PositionSelectByIndex(i)) // Select a position by its index (Correct MQL5 way)
         {
             // Check if the position belongs to this EA (by MagicNumber) and symbol
             if (PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
@@ -214,7 +222,7 @@ void OnTick()
         if (current_ema_value > Exit_Level_Close)
         {
             // Close the existing BUY position
-            if (trade.PositionClose(buy_position_ticket, SlippagePoints * _Point))
+            if (trade.PositionClose(buy_position_ticket, SlippagePoints * _SymbolPoint))
             {
                 Print("BUY position (Ticket: ", buy_position_ticket, ") closed by strategy logic (EMA > Exit_Level_Close).");
             }
