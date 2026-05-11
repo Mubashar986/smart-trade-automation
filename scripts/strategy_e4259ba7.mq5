@@ -4,9 +4,9 @@
 #property description "RSI-based trading strategy"
 #property strict
 
-// --- Expert Advisor Properties ---
-// #property indicator_separate_window // This is typically for custom indicators, not EAs
-// #property indicator_buffers 0      // This is typically for custom indicators, not EAs
+// --- Required MQL5 libraries ---
+#include <Trade\Trade.mqh>      // For CTrade class (sending orders)
+#include <Trade\SymbolInfo.mqh> // For CSymbolInfo class (getting symbol details)
 
 // --- Input Parameters ---
 input string InpSymbol              = "XAUUSD";             // Trading Symbol
@@ -41,14 +41,12 @@ datetime   m_lastBarTime = 0;       // Stores the time of the last processed bar
 //+------------------------------------------------------------------+
 int OnInit()
 {
-    // Initialize CTrade and CSymbolInfo objects
-    if (!m_trade.IsInitialized())
+    // Initialize CTrade object with magic number and EA name
+    // Corrected: CTrade::Init expects magic number first, then expert name.
+    if (!m_trade.Init(InpMagicNumber, __FILE__))
     {
-        if (!m_trade.Init(__FILE__, InpMagicNumber))
-        {
-            Print("Failed to initialize CTrade object. Error: ", GetLastError());
-            return INIT_FAILED;
-        }
+        Print("Failed to initialize CTrade object. Error: ", GetLastError());
+        return INIT_FAILED;
     }
     
     // Set slippage for CTrade object
@@ -157,6 +155,7 @@ void OnTick()
     // --- Get RSI values ---
     double rsiBuffer[];
     // Copy the last 2 RSI values (current and previous bar)
+    // rsiBuffer[0] is current bar, rsiBuffer[1] is previous bar
     if (CopyBuffer(m_rsiHandle, 0, 0, 2, rsiBuffer) != 2)
     {
         Print("Failed to get RSI values. Error code: ", GetLastError());
@@ -182,7 +181,8 @@ void OnTick()
             return; // Exit OnTick to prevent further actions on this bar
         }
 
-        // RSI buy condition: previous bar's RSI crossed below the buy level
+        // RSI buy condition: previous bar's RSI was below the buy level (oversold)
+        // This suggests a potential reversal from oversold conditions.
         if (previousRSI < InpRSIBuyLevel)
         {
             Print("BUY Signal detected: Previous RSI (", previousRSI, ") < Buy Level (", InpRSIBuyLevel, "). Attempting to open BUY position.");
@@ -227,7 +227,8 @@ void OnTick()
     // --- Exit Logic (CLOSE BUY) and Trailing Stop ---
     else if (buyPositionsCount > 0) // If there are open BUY positions to manage
     {
-        // RSI close condition: current bar's RSI crossed above the exit level
+        // RSI close condition: current bar's RSI crossed above the exit level (overbought)
+        // This suggests a potential reversal from overbought conditions, signaling to close BUYs.
         if (currentRSI > InpRSIExitLevel)
         {
             Print("CLOSE BUY Signal detected: Current RSI (", currentRSI, ") > Exit Level (", InpRSIExitLevel, "). Attempting to close open BUY positions.");
@@ -287,13 +288,15 @@ void OnTick()
                         double openPrice       = PositionGetDouble(POSITION_PRICE_OPEN);
 
                         // Calculate the new potential stop loss based on trailing points
+                        // For a BUY, SL should move up as price moves up.
                         double newStopLoss = NormalizeDouble(currentBid - InpTrailingStopPoints * m_point, m_digits);
 
                         // Only adjust SL if the position is in profit and the new SL is higher than the current SL
                         // (or if current SL is 0 and new SL is profitable)
-                        if (currentBid > openPrice + InpTrailingStopPoints * m_point) // Price has moved enough to trail
+                        // Ensure price has moved enough to cover the trailing stop distance from open price
+                        if (currentBid > openPrice + InpTrailingStopPoints * m_point) 
                         {
-                            if (currentStopLoss == 0 || newStopLoss > currentStopLoss)
+                            if (newStopLoss > currentStopLoss) // Only move SL if it improves (increases for BUY)
                             {
                                 if (m_trade.PositionModify(positionTicket, newStopLoss, PositionGetDouble(POSITION_TP)))
                                 {
@@ -336,11 +339,11 @@ int GetOpenPositionsCount(ENUM_POSITION_TYPE type)
 }
 
 //+------------------------------------------------------------------+
-//| Helper: Count total trades executed by this EA for the current day|
+//| Helper: Count total opening trades executed by this EA for the current day|
 //+------------------------------------------------------------------+
 int GetDailyTradesCount()
 {
-    int count = 0;
+    int openTradeCount = 0;
     // Get the start of the current day
     datetime today = iTime(NULL, PERIOD_D1, 0); 
 
@@ -359,44 +362,8 @@ int GetDailyTradesCount()
         {
             // Filter by symbol and magic number
             if (HistoryDealGetString(dealTicket, DEAL_SYMBOL) == InpSymbol &&
-                HistoryDealGetInteger(dealTicket, DEAL_MAGIC) == InpMagicNumber)
-            {
-                // Count opening deals (DEAL_ENTRY_IN for BUY, DEAL_ENTRY_OUT for SELL)
-                // Note: a complete trade (open and close) typically involves two deals: DEAL_ENTRY_IN and DEAL_ENTRY_OUT.
-                // We count 'trades' as instances of opening a position.
-                if (HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_IN ||
-                    HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_OUT)
-                {
-                    count++;
-                }
-            }
-        }
-    }
-    // Since DEAL_ENTRY_IN means opening, and DEAL_ENTRY_OUT is usually closing,
-    // if we count both, we're counting "deal events". To count "number of positions opened",
-    // we need to refine this. For simplicity, we can count just DEAL_ENTRY_IN for new positions.
-    // Or, if we assume each "trade" has an entry and exit, we divide by 2.
-    // Let's refine to count distinct opening trades.
-    
-    // The typical way to count "trades" for daily limits is counting "opening" deals.
-    // DEAL_ENTRY_IN for buy, DEAL_ENTRY_OUT for sell.
-    // In this specific strategy, we only place BUYs.
-    // So, we should look for DEAL_ENTRY_IN and DEAL_TYPE_BUY for simplicity
-    
-    // Re-evaluating based on "max_trades_per_day":
-    // It's usually interpreted as "number of positions opened".
-    // DEAL_ENTRY_IN (for buy) or DEAL_ENTRY_OUT (for sell) are entry points.
-    
-    // For a BUY-only strategy, we count deals with DEAL_ENTRY_IN.
-    int openTradeCount = 0;
-    for (int i = 0; i < totalDeals; i++)
-    {
-        ulong dealTicket = HistoryDealGetTicket(i);
-        if (dealTicket != 0)
-        {
-            if (HistoryDealGetString(dealTicket, DEAL_SYMBOL) == InpSymbol &&
                 HistoryDealGetInteger(dealTicket, DEAL_MAGIC) == InpMagicNumber &&
-                HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_IN) // This signifies an opening deal
+                HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_IN) // Count only opening deals
             {
                 openTradeCount++;
             }
