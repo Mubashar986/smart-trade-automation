@@ -69,5 +69,6 @@ def enforce_script_limit(user_id, db: Session):
     )
     if len(jobs) > MAX_SCRIPTS_PER_USER:
         for old_job in jobs[MAX_SCRIPTS_PER_USER:]:
-            db.delete(old_job)
+            if old_job.run is None:
+                db.delete(old_job)
         db.commit()

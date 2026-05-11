@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from backend.api.routes import strategy, results, auth, billing, dryrun
+from backend.api.routes import strategy, results, auth, billing, dryrun, chat
 from backend.db.database import engine, Base
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +26,7 @@ app.include_router(strategy.router)
 app.include_router(results.router)
 app.include_router(billing.router)
 app.include_router(dryrun.router)
+app.include_router(chat.router)
 
 @app.get("/")
 def read_root():

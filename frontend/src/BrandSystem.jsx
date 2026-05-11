@@ -148,3 +148,56 @@ export function ChevronDownIcon(props) {
   )
 }
 
+export function PlusIcon(props) {
+  return (
+    <IconBase {...props}>
+      <path d="M12 5.5v13" />
+      <path d="M5.5 12h13" />
+    </IconBase>
+  )
+}
+
+export function SearchIcon(props) {
+  return (
+    <IconBase {...props}>
+      <circle cx="11" cy="11" r="5.8" />
+      <path d="m16 16 3 3" />
+    </IconBase>
+  )
+}
+
+export function DownloadIcon(props) {
+  return (
+    <IconBase {...props}>
+      <path d="M12 4.8v10.5" />
+      <path d="m7.8 11.3 4.2 4.2 4.2-4.2" />
+      <path d="M5.2 18.2h13.6" />
+    </IconBase>
+  )
+}
+
+export function PanelRightIcon(props) {
+  return (
+    <IconBase {...props}>
+      <rect x="4.2" y="5.2" width="15.6" height="13.6" rx="2.2" />
+      <path d="M13.2 5.2v13.6" />
+    </IconBase>
+  )
+}
+
+export function MessageIcon(props) {
+  return (
+    <IconBase {...props}>
+      <path d="M6.2 7.2h11.6v8.6H9.4l-3.2 2.6z" />
+    </IconBase>
+  )
+}
+
+export function ArrowUpIcon(props) {
+  return (
+    <IconBase {...props}>
+      <path d="M12 18V6.4" />
+      <path d="m7.6 10.5 4.4-4.4 4.4 4.4" />
+    </IconBase>
+  )
+}

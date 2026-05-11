@@ -1,214 +1,236 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react'
 
 const PARAM_DETAILS = {
   lot_size: {
-    rule: "Rule 5",
-    title: "Lot Size (Safe Range: 0.01 – 1.0)",
-    detail: "Lot Size controls how large each trade is. 0.01 is the safest minimum — it means very small risk per trade. Going above 1.0 puts an unsafe amount of capital at risk in a single trade."
+    rule: 'Rule 5',
+    title: 'Lot Size',
+    detail: 'Controls position size. Smaller lot sizes reduce exposure and are safer for initial strategy attempts.',
   },
   stop_loss_points: {
-    rule: "Rule 6",
-    title: "Stop-Loss (Points)",
-    detail: "Stop-Loss is the most important safety net. If the market moves against you by this many points, the trade is automatically closed to prevent further loss. 300 points (30 pips) is a safe default. Without it, a single bad trade can wipe your account."
-  },
-  max_trades_per_day: {
-    rule: "Rule 8",
-    title: "Max Trades Per Day (Limit: 1 – 10)",
-    detail: "This limits how many trades the bot opens each day. Trading too frequently in volatile markets compounds losses rapidly. A safe default is 3. The maximum allowed by our system is 10."
+    rule: 'Rule 6',
+    title: 'Stop-Loss',
+    detail: 'Protects the account by closing the trade when price moves too far in the wrong direction.',
   },
   take_profit_points: {
-    rule: "Recommended",
-    title: "Take Profit (Points)",
-    detail: "Take Profit automatically closes the trade once it reaches a profit target. 600 points provides a healthy 1:2 risk-to-reward ratio when paired with a 300 point stop-loss."
+    rule: 'Recommended',
+    title: 'Take Profit',
+    detail: 'Defines a target for exiting the trade at a profit and improves risk-reward structure.',
+  },
+  max_trades_per_day: {
+    rule: 'Rule 8',
+    title: 'Max Trades / Day',
+    detail: 'Limits overtrading and helps keep the strategy from opening too many positions in one session.',
   },
   max_drawdown_percent: {
-    rule: "Rule 9 Guard",
-    title: "Max Drawdown (%) — Martingale Guard",
-    detail: "Setting a drawdown limit prevents unlimited martingale patterns. If your account balance drops by this percentage in a day, trading halts automatically. 5.0% is a safe default."
+    rule: 'Rule 9 Guard',
+    title: 'Max Drawdown (%)',
+    detail: 'Adds a hard risk cap to stop the strategy if losses reach an unsafe level.',
+  },
+}
+
+function normalizeInitialData(initialData) {
+  try {
+    const data = typeof initialData === 'string' ? JSON.parse(initialData) : initialData
+    return {
+      symbol: data.symbol || 'XAUUSD',
+      timeframe: data.timeframe || 'H1',
+      strategy_type: data.strategy_type || 'RSI',
+      entry: {
+        indicator: data.entry?.indicator || 'RSI',
+        period: data.entry?.period || 14,
+        operator: data.entry?.operator || '<',
+        value: data.entry?.value || 30,
+        action: data.entry?.action || 'BUY',
+      },
+      exit: {
+        indicator: data.exit?.indicator || 'RSI',
+        period: data.exit?.period || 14,
+        operator: data.exit?.operator || '>',
+        value: data.exit?.value || 70,
+        action: data.exit?.action || 'CLOSE',
+      },
+      risk: {
+        lot_size: data.risk?.lot_size ?? 0.01,
+        stop_loss_points: data.risk?.stop_loss_points ?? 300,
+        take_profit_points: data.risk?.take_profit_points ?? 600,
+        max_trades_per_day: data.risk?.max_trades_per_day ?? 3,
+        max_drawdown_percent: data.risk?.max_drawdown_percent ?? 5.0,
+        max_consecutive_losses: data.risk?.max_consecutive_losses ?? 3,
+        trailing_stop_points: data.risk?.trailing_stop_points ?? 100,
+        slippage_points: data.risk?.slippage_points ?? 30,
+      },
+    }
+  } catch {
+    return null
   }
-};
+}
 
-// Helper to build a param row
-function ParamRow({ fieldKey, label, value, step, onAdjust, onUpdate, expandedKey, onToggle }) {
-  const info = PARAM_DETAILS[fieldKey];
-  const isExpanded = expandedKey === fieldKey;
-
+function ParamRow({ fieldKey, value, step, onAdjust, onUpdate, expanded, onToggle }) {
+  const info = PARAM_DETAILS[fieldKey]
   return (
-    <div className="param-item">
-      <div className="param-header">
+    <div className="safety-editor__row">
+      <div className="safety-editor__row-head">
         <div>
-          <label>{label}</label>
-          {info?.rule && <span className="rule-tag">{info.rule}</span>}
+          <h4>{info.title}</h4>
+          <span>{info.rule}</span>
         </div>
-        <button className="detail-btn" onClick={() => onToggle(fieldKey)}>?</button>
+        <button type="button" className="safety-editor__detail-toggle" onClick={() => onToggle(fieldKey)}>
+          {expanded ? 'Hide' : 'Why?'}
+        </button>
       </div>
-      <div className="param-controls">
-        <button onClick={() => onAdjust(false)}>−</button>
+
+      <div className="safety-editor__stepper">
+        <button type="button" onClick={() => onAdjust(false)} aria-label={`Decrease ${info.title}`}>
+          –
+        </button>
         <input
           type="number"
           step={step}
           value={value}
-          onChange={(e) => onUpdate(fieldKey, step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value))}
+          onChange={(event) =>
+            onUpdate(
+              fieldKey,
+              step < 1 ? parseFloat(event.target.value || '0') : parseInt(event.target.value || '0', 10)
+            )
+          }
         />
-        <button onClick={() => onAdjust(true)}>+</button>
+        <button type="button" onClick={() => onAdjust(true)} aria-label={`Increase ${info.title}`}>
+          +
+        </button>
       </div>
-      {isExpanded && (
-        <div className="param-detail">
-          <strong style={{ color: 'var(--amber)', display: 'block', marginBottom: '4px' }}>{info?.title}</strong>
-          {info?.detail}
-        </div>
-      )}
+
+      {expanded && <p className="safety-editor__detail">{info.detail}</p>}
     </div>
-  );
+  )
 }
 
-export default function StrategyEditor({ initialData, onSubmit, onCancel }) {
-  const [formData, setFormData] = useState(() => {
-    try {
-      const data = typeof initialData === 'string' ? JSON.parse(initialData) : initialData;
-      return {
-        symbol: data.symbol || 'XAUUSD',
-        timeframe: data.timeframe || 'H1',
-        strategy_type: data.strategy_type || 'RSI',
-        entry: {
-          indicator: data.entry?.indicator || 'RSI',
-          period: data.entry?.period || 14,
-          operator: data.entry?.operator || '<',
-          value: data.entry?.value || 30,
-          action: data.entry?.action || 'BUY'
-        },
-        exit: {
-          indicator: data.exit?.indicator || 'RSI',
-          period: data.exit?.period || 14,
-          operator: data.exit?.operator || '>',
-          value: data.exit?.value || 70,
-          action: data.exit?.action || 'CLOSE'
-        },
-        risk: {
-          lot_size: data.risk?.lot_size ?? 0.01,
-          stop_loss_points: data.risk?.stop_loss_points ?? 300,
-          take_profit_points: data.risk?.take_profit_points ?? 600,
-          max_trades_per_day: data.risk?.max_trades_per_day ?? 3,
-          max_drawdown_percent: data.risk?.max_drawdown_percent ?? 5.0,
-          max_consecutive_losses: data.risk?.max_consecutive_losses ?? 3,
-          trailing_stop_points: data.risk?.trailing_stop_points ?? 100,
-          slippage_points: data.risk?.slippage_points ?? 30
-        }
-      };
-    } catch {
-      return null;
-    }
-  });
+export default function StrategyEditor({ initialData, onSubmit, onCancel, embedded = false }) {
+  const [formData, setFormData] = useState(() => normalizeInitialData(initialData))
+  const [expandedDetail, setExpandedDetail] = useState(null)
 
-  const [expandedDetail, setExpandedDetail] = useState(null);
+  const params = useMemo(
+    () => [
+      { key: 'lot_size', step: 0.01, adjust: 0.01 },
+      { key: 'stop_loss_points', step: 1, adjust: 50 },
+      { key: 'take_profit_points', step: 1, adjust: 50 },
+      { key: 'max_trades_per_day', step: 1, adjust: 1 },
+      { key: 'max_drawdown_percent', step: 0.5, adjust: 0.5 },
+    ],
+    []
+  )
 
-  if (!formData) return <div className="glass-card">Invalid strategy data.</div>;
-
-  const toggleDetail = (key) => setExpandedDetail(expandedDetail === key ? null : key);
+  if (!formData) {
+    return <div className="safety-editor__invalid">Invalid strategy data.</div>
+  }
 
   const updateRisk = (key, value) => {
-    setFormData(prev => ({ ...prev, risk: { ...prev.risk, [key]: value } }));
-  };
+    setFormData((prev) => ({
+      ...prev,
+      risk: {
+        ...prev.risk,
+        [key]: value,
+      },
+    }))
+  }
 
-  const adjustRisk = (key, increment, step) => {
-    setFormData(prev => {
-      let next = parseFloat(prev.risk[key] || 0) + (increment ? step : -step);
-      if (key === 'lot_size') next = Math.max(0.01, Math.min(1.0, parseFloat(next.toFixed(2))));
-      else if (key === 'max_drawdown_percent') next = Math.max(0.5, Math.min(10.0, parseFloat(next.toFixed(1))));
-      else if (key === 'max_trades_per_day') next = Math.max(1, Math.min(10, next));
-      else next = Math.max(0, next);
-      return { ...prev, risk: { ...prev.risk, [key]: next } };
-    });
-  };
+  const adjustRisk = (key, increment, amount) => {
+    setFormData((prev) => {
+      let next = parseFloat(prev.risk[key] || 0) + (increment ? amount : -amount)
 
-  const params = [
-    { key: 'lot_size',              label: 'Lot Size',              step: 0.01,  adjStep: 0.01 },
-    { key: 'stop_loss_points',      label: 'Stop-Loss (Points)',    step: 1,     adjStep: 50   },
-    { key: 'take_profit_points',    label: 'Take Profit (Points)',  step: 1,     adjStep: 50   },
-    { key: 'max_trades_per_day',    label: 'Max Trades / Day',      step: 1,     adjStep: 1    },
-    { key: 'max_drawdown_percent',  label: 'Max Drawdown (%)',      step: 0.5,   adjStep: 0.5  },
-  ];
+      if (key === 'lot_size') next = Math.max(0.01, Math.min(1.0, parseFloat(next.toFixed(2))))
+      else if (key === 'max_drawdown_percent') next = Math.max(0.5, Math.min(10.0, parseFloat(next.toFixed(1))))
+      else if (key === 'max_trades_per_day') next = Math.max(1, Math.min(10, Math.round(next)))
+      else next = Math.max(0, Math.round(next))
 
-  return (
-    <div className="page-wrap">
-      <div style={{
-        background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)',
-        borderRadius:'20px',padding:'36px',maxWidth:'760px',margin:'40px auto',
-        animation:'fadeUp .4s ease'
-      }}>
-        <div style={{textAlign:'center',marginBottom:'28px'}}>
-          <div style={{fontSize:'2.5rem',marginBottom:'8px'}}>🛡️</div>
-          <h2 style={{fontSize:'1.6rem',fontWeight:800,marginBottom:'8px',
-            background:'linear-gradient(135deg,#fff 30%,#00d4a0)',
-            WebkitBackgroundClip:'text',backgroundClip:'text',WebkitTextFillColor:'transparent'
-          }}>Make Strategy Safe</h2>
-          <p style={{color:'#64748b',fontSize:'.9rem'}}>Your strategy failed validation. Adjust the parameters below to meet all 10 safety rules.</p>
+      return {
+        ...prev,
+        risk: {
+          ...prev.risk,
+          [key]: next,
+        },
+      }
+    })
+  }
+
+  const shell = (
+    <div className={`safety-editor ${embedded ? 'embedded' : ''}`}>
+      <div className="safety-editor__hero">
+        <div className="safety-editor__icon">🛡</div>
+        <span className="safety-editor__eyebrow">Recovery modal</span>
+        <h2>Make Strategy Safe</h2>
+        <p>Your strategy hit validation safeguards. Adjust the recoverable risk parameters below and retry inside the same conversation.</p>
+      </div>
+
+      <div className="safety-editor__rules">
+        <span className="safety-editor__rules-title">Current rule coverage</span>
+        <div className="safety-editor__chips">
+          {[
+            'R1 Symbol required',
+            'R2 Timeframe required',
+            'R3 Entry condition',
+            'R4 Exit condition',
+            'R5 Lot size range',
+            'R6 Stop-loss recommended',
+            'R7 No conflicting logic',
+            'R8 Max trades limited',
+            'R9 No martingale',
+            'R10 No infinite positions',
+          ].map((item) => (
+            <span key={item}>{item}</span>
+          ))}
+        </div>
+      </div>
+
+      <div className="safety-editor__body">
+        <div className="safety-editor__summary">
+          <div>
+            <small>Symbol</small>
+            <strong>{formData.symbol}</strong>
+          </div>
+          <div>
+            <small>Timeframe</small>
+            <strong>{formData.timeframe}</strong>
+          </div>
+          <div>
+            <small>Strategy</small>
+            <strong>{formData.strategy_type}</strong>
+          </div>
         </div>
 
-      {/* Rules checklist */}
-        <div style={{
-          background:'rgba(0,212,160,0.04)',border:'1px solid rgba(0,212,160,0.12)',
-          borderRadius:'12px',padding:'16px 20px',marginBottom:'24px'
-        }}>
-          <strong style={{display:'block',color:'#00d4a0',fontSize:'.8rem',
-            textTransform:'uppercase',letterSpacing:'1px',marginBottom:'10px'}}>
-            Safety Rules Checklist
-          </strong>
-          <div style={{display:'flex',flexWrap:'wrap',gap:'8px'}}>
-            {[
-              "Symbol is required","Timeframe is required","Entry condition",
-              "Exit condition","Lot size range","Stop-loss recommended",
-              "No conflicting logic","Max trades limited","No martingale","No infinite positions"
-            ].map((r,i)=>(
-              <span key={i} style={{
-                background:'rgba(0,212,160,0.08)',border:'1px solid rgba(0,212,160,0.2)',
-                color:'#64748b',fontSize:'.72rem',padding:'3px 9px',borderRadius:'20px'
-              }}>✓ R{i+1}: {r}</span>
+        <div className="safety-editor__panel">
+          <div className="safety-editor__panel-head">
+            <h3>Recoverable risk parameters</h3>
+            <p>These controls are currently focused on the risk values the system can safely repair inline.</p>
+          </div>
+
+          <div className="safety-editor__grid">
+            {params.map(({ key, step, adjust }) => (
+              <ParamRow
+                key={key}
+                fieldKey={key}
+                value={formData.risk[key]}
+                step={step}
+                expanded={expandedDetail === key}
+                onToggle={(field) => setExpandedDetail((current) => (current === field ? null : field))}
+                onAdjust={(inc) => adjustRisk(key, inc, adjust)}
+                onUpdate={updateRisk}
+              />
             ))}
           </div>
         </div>
+      </div>
 
-        <div style={{
-          background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.07)',
-          borderRadius:'12px',padding:'20px',marginBottom:'20px'
-        }}>
-          <h3 style={{fontSize:'1rem',fontWeight:700,color:'#00d4a0',marginBottom:'16px'}}>Risk Parameters</h3>
-          <div className="params-grid">
-          {params.map(({ key, label, step, adjStep }) => (
-            <ParamRow
-              key={key}
-              fieldKey={key}
-              label={label}
-              value={formData.risk[key]}
-              step={step}
-              onAdjust={(inc) => adjustRisk(key, inc, adjStep)}
-              onUpdate={updateRisk}
-              expandedKey={expandedDetail}
-              onToggle={toggleDetail}
-            />
-          ))}
-          </div>
-        </div>
-
-        <div style={{display:'flex',gap:'14px',marginTop:'4px'}}>
-          <button style={{
-            flex:1,padding:'12px',background:'transparent',
-            border:'1px solid rgba(255,255,255,0.1)',color:'#64748b',
-            borderRadius:'12px',cursor:'pointer',fontFamily:'Inter,sans-serif',
-            fontSize:'.9rem',transition:'all .2s'
-          }} onClick={onCancel}>← Cancel</button>
-          <button style={{
-            flex:2,padding:'12px',
-            background:'linear-gradient(135deg,#00d4a0,#00b386)',
-            color:'#050d1a',border:'none',borderRadius:'12px',
-            cursor:'pointer',fontFamily:'Inter,sans-serif',
-            fontSize:'.95rem',fontWeight:700,
-            boxShadow:'0 0 20px rgba(0,212,160,0.3)',transition:'all .25s'
-          }} onClick={() => onSubmit(JSON.stringify(formData))}>
-            Submit Fixed Strategy →
-          </button>
-        </div>
+      <div className="safety-editor__actions">
+        <button type="button" className="safety-editor__cancel" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="button" className="safety-editor__submit" onClick={() => onSubmit(JSON.stringify(formData))}>
+          Submit Fixed Strategy
+        </button>
       </div>
     </div>
-  );
+  )
+
+  if (embedded) return shell
+  return <div className="page-wrap">{shell}</div>
 }
