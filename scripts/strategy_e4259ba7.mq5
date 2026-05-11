@@ -42,8 +42,8 @@ datetime   m_lastBarTime = 0;       // Stores the time of the last processed bar
 int OnInit()
 {
     // Initialize CTrade object with magic number and EA name
-    // Corrected: CTrade::Init expects magic number first, then expert name.
-    if (!m_trade.Init(InpMagicNumber, __FILE__))
+    // Fix: Use MQL_PROGRAM_NAME instead of __FILE__ for the expert name.
+    if (!m_trade.Init(InpMagicNumber, MQL_PROGRAM_NAME))
     {
         Print("Failed to initialize CTrade object. Error: ", GetLastError());
         return INIT_FAILED;
@@ -136,9 +136,12 @@ void OnTick()
     // --- Check for new bar ---
     MqlRates rates[];
     // Get the last bar's data for the specified symbol and timeframe
+    // Copy 1 bar starting from index 0 (the most recent completed bar).
     if (CopyRates(InpSymbol, InpTimeframe, 0, 1, rates) != 1)
     {
-        Print("Failed to get rates for ", InpSymbol, " ", EnumToString(InpTimeframe));
+        // If we can't get rates, it might be due to no new data or network issues.
+        // Or if the timeframe is not available for the symbol.
+        Print("Failed to get rates for ", InpSymbol, " ", EnumToString(InpTimeframe), ". Error: ", GetLastError());
         return;
     }
 
@@ -155,15 +158,16 @@ void OnTick()
     // --- Get RSI values ---
     double rsiBuffer[];
     // Copy the last 2 RSI values (current and previous bar)
-    // rsiBuffer[0] is current bar, rsiBuffer[1] is previous bar
+    // rsiBuffer[0] will be for the most recently completed bar (matching rates[0])
+    // rsiBuffer[1] will be for the bar prior to that.
     if (CopyBuffer(m_rsiHandle, 0, 0, 2, rsiBuffer) != 2)
     {
         Print("Failed to get RSI values. Error code: ", GetLastError());
         return;
     }
 
-    double currentRSI  = rsiBuffer[0]; // RSI for the just closed bar (corresponding to `rates[0]`)
-    double previousRSI = rsiBuffer[1]; // RSI for the bar before the just closed one (corresponding to `rates[1]`)
+    double currentRSI  = rsiBuffer[0]; // RSI for the just closed bar
+    double previousRSI = rsiBuffer[1]; // RSI for the bar before the just closed one
 
     // --- Trading Logic ---
     
@@ -296,7 +300,9 @@ void OnTick()
                         // Ensure price has moved enough to cover the trailing stop distance from open price
                         if (currentBid > openPrice + InpTrailingStopPoints * m_point) 
                         {
-                            if (newStopLoss > currentStopLoss) // Only move SL if it improves (increases for BUY)
+                            // Ensure the new Stop Loss is above the open price and improves the current SL
+                            // The condition `newStopLoss > openPrice` ensures we are locking in profit.
+                            if (newStopLoss > currentStopLoss && newStopLoss > openPrice)
                             {
                                 if (m_trade.PositionModify(positionTicket, newStopLoss, PositionGetDouble(POSITION_TP)))
                                 {
@@ -344,8 +350,9 @@ int GetOpenPositionsCount(ENUM_POSITION_TYPE type)
 int GetDailyTradesCount()
 {
     int openTradeCount = 0;
-    // Get the start of the current day
-    datetime today = iTime(NULL, PERIOD_D1, 0); 
+    // Get the start of the current day for the specified symbol
+    // Fix: Use InpSymbol for iTime to ensure consistency with trading symbol.
+    datetime today = iTime(InpSymbol, PERIOD_D1, 0); 
 
     // Select all history from today to now
     if (!HistorySelect(today, TimeCurrent()))
